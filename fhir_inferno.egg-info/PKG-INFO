@@ -1,3 +1,29 @@
+Metadata-Version: 2.4
+Name: fhir-inferno
+Version: 0.1.0
+Summary: A simple library to parse FHIR JSON/NDJSON into CSV/Parquet or DataFrame
+Author: FHIR Inferno Contributors
+Project-URL: Homepage, https://github.com/
+Keywords: FHIR,healthcare,ETL,JSON,NDJSON,parquet,CSV
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Provides-Extra: return
+Requires-Dist: pandas>=1.0; extra == "return"
+Provides-Extra: parquet
+Requires-Dist: pandas>=1.0; extra == "parquet"
+Requires-Dist: pyarrow>=8; extra == "parquet"
+
 # FHIR Inferno
 FHIR Inferno is a python library designed to parse json objects, so that they can be loaded to a warehouse or database for further processing or analysis.  The library was designed for simplicity, and may not handle all advanced use cases.
 

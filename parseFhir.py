@@ -60,9 +60,10 @@ def compare_and_write_new_paths(json_obj, filename, anchor, config_paths, output
 
 
     if new_paths:
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        dir_name = os.path.dirname(output_file)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         with open(output_file, 'a') as file:
-
             for path in new_paths:
                 if anchor:
                     file.write(f'"{filename.name}","Anchor:{path}","{anchor}"\n')
@@ -96,7 +97,7 @@ def getJsonValue(lnjsn, ln,filename = ""):
     for x in ln.split("."):
         if x.startswith("ArrJoin:"):
             x = x[8:]
-            if x in lnjsn:
+            if isinstance(lnjsn, dict) and x in lnjsn and isinstance(lnjsn[x], list):
                 tempVal = ' '.join([str(item) for item in lnjsn[x]])
                 lnjsn = tempVal
             else:
@@ -105,6 +106,30 @@ def getJsonValue(lnjsn, ln,filename = ""):
             lnjsn = filename
         elif x.startswith("GetDate:"):
             lnjsn = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        elif x.startswith("FileMTime:"):
+            # Returns file modified time in ISO8601 Z
+            try:
+                mtime = os.path.getmtime(filename) if filename else None
+                if mtime:
+                    lnjsn = datetime.utcfromtimestamp(mtime).isoformat() + 'Z'
+                else:
+                    lnjsn = datetime.utcnow().isoformat() + 'Z'
+            except Exception:
+                lnjsn = datetime.utcnow().isoformat() + 'Z'
+        elif x.startswith("JsonDump:"):
+            sub = x[9:]
+            try:
+                target = lnjsn if sub == '' else (lnjsn.get(sub) if isinstance(lnjsn, dict) else None)
+                lnjsn = json.dumps(target, ensure_ascii=False) if target is not None else None
+            except Exception:
+                lnjsn = None
+        elif x.startswith("ObjToKeyValArr:"):
+            sub = x[15:]
+            target = lnjsn if sub == '' else (lnjsn.get(sub) if isinstance(lnjsn, dict) else None)
+            if isinstance(target, dict):
+                lnjsn = [{"key": k, "value": v} for k, v in target.items()]
+            else:
+                return None
         elif x.startswith("ArrNotHave:"):
             x = x[11:]
             found = False
@@ -130,38 +155,38 @@ def getJsonValue(lnjsn, ln,filename = ""):
             lnjsn = x[5:]
         elif x.startswith("IfEx:"):
             spl = x[5:].split("|")
-            if spl[0] in lnjsn:
+            if isinstance(lnjsn, dict) and spl[0] in lnjsn:
                 lnjsn = spl[1]
             else:
                 lnjsn = spl[2]
         elif x.startswith("IfEq:"):
             spl = x[5:].split("|")
-            if lnjsn[spl[0]] == spl[1].replace(",","."):
+            if isinstance(lnjsn, dict) and spl[0] in lnjsn and lnjsn[spl[0]] == spl[1].replace(",","."):
                 lnjsn = spl[2]
             else:
                 lnjsn = spl[3]
         elif x.startswith("Left:"):
             spl = x[5:].split("|")
-            if spl[0] in lnjsn:
+            if isinstance(lnjsn, dict) and spl[0] in lnjsn:
                 lnjsn = lnjsn[spl[0]]
                 lnjsn = lnjsn[:int(spl[1])]
             else:
                 return None
         elif x.startswith("LTrim:"):
             spl = x[6:].split("|")
-            if spl[0] in lnjsn:
+            if isinstance(lnjsn, dict) and spl[0] in lnjsn:
                 lnjsn = lnjsn[spl[0]]
                 lnjsn = lnjsn[int(spl[1]):]
             else:
                 return None
         elif x.startswith("TimeForm:"):
             x = x[9:]
-            if x in lnjsn:
+            if isinstance(lnjsn, dict) and x in lnjsn:
                 lnjsn = lnjsn[x]
                 lnjsn = lnjsn[:19].replace("T"," ")
             else:
                 return None
-        elif x in lnjsn and not isinstance(lnjsn,str):
+        elif isinstance(lnjsn, dict) and x in lnjsn and not isinstance(lnjsn,str):
             lnjsn = lnjsn[x]
         elif is_integer(x):
             if isinstance(lnjsn, list) and int(x) < len(lnjsn):
@@ -239,11 +264,9 @@ def parse(configPath,inputPath=None,outputPath=None,missingPath=None,outputForma
     config = configparser.ConfigParser()
     try:
         config.read(configPath)
-    except:
+    except Exception as e:
         logging.exception(f"Failed to read or parse the configuration file: {configPath}. Error: {e}")
         return
-
-
 
     anchor = config['GenConfig'].get('anchor', False)
     inputPath = inputPath or config['GenConfig']['inputPath']
@@ -259,7 +282,7 @@ def parse(configPath,inputPath=None,outputPath=None,missingPath=None,outputForma
 
     if inputFormat == 'ndjson' and outputFormat != 'csv':
         raise ValueError("Input format 'ndjson' is only supported with 'csv' output format.")
-    
+
     data = []
     header = []
     paths = []
@@ -271,6 +294,7 @@ def parse(configPath,inputPath=None,outputPath=None,missingPath=None,outputForma
         paths.append(config['Struct'][key])
         leng = leng + 1
 
+    # Prepare CSV writer if needed (single file for all inputs)
     if outputFormat == 'csv':
         csvfile = open(outputPath, writeMode, newline='')
         csvwriter = csv.writer(csvfile,
@@ -284,38 +308,63 @@ def parse(configPath,inputPath=None,outputPath=None,missingPath=None,outputForma
         csvfile = None
         csvwriter = None
 
-
-
-    if inputFormat == 'ndjson':
-        with open(inputPath, encoding='utf-8-sig') as inputFile:
-            for jsntxt in inputFile:
-                result_count = 0
-                try:
-                    jsndict = json.loads(jsntxt)
-                    result_count = parse_one_resource(anchor, paths, jsndict, leng, csvwriter,data,inputPath,outputFormat)
-                    if missingPath:
-                        compare_and_write_new_paths(jsndict,inputFile,anchor,config,missingPath)
-                except:
-
-                    logging.exception('Issue with input file "%s", see badfile.csv',
-                                      configPath
-                                      )
-                row_count = row_count + (result_count or 0)
-    elif inputFormat == 'json':
-        with open(inputPath, encoding='utf-8-sig') as inputFile:
-            result_count = 0
-            try:
+    def process_json_file(file_path):
+        nonlocal row_count
+        try:
+            with open(file_path, encoding='utf-8-sig') as inputFile:
                 jsndict = json.loads(inputFile.read())
-                result_count = parse_one_resource(anchor, paths, jsndict, leng, csvwriter,data,inputPath,outputFormat)
+                result_count = parse_one_resource(anchor, paths, jsndict, leng, csvwriter, data, file_path, outputFormat)
                 if missingPath:
-                    compare_and_write_new_paths(jsndict,inputFile,anchor,config,missingPath)
-            except:
-                logging.exception('Issue with input file "%s" ',
-                                  configPath
-                                  )
+                    compare_and_write_new_paths(jsndict, inputFile, anchor, config, missingPath)
+                row_count += (result_count or 0)
+        except Exception:
+            logging.exception('Issue with input file "%s" ', file_path)
 
+    def process_ndjson_file(file_path):
+        nonlocal row_count
+        try:
+            with open(file_path, encoding='utf-8-sig') as inputFile:
+                for jsntxt in inputFile:
+                    if not jsntxt.strip():
+                        continue
+                    try:
+                        jsndict = json.loads(jsntxt)
+                        result_count = parse_one_resource(anchor, paths, jsndict, leng, csvwriter, data, file_path, outputFormat)
+                        if missingPath:
+                            compare_and_write_new_paths(jsndict, inputFile, anchor, config, missingPath)
+                        row_count += (result_count or 0)
+                    except Exception:
+                        logging.exception('Issue with JSON line in "%s"', file_path)
+        except Exception:
+            logging.exception('Issue opening NDJSON file "%s"', file_path)
 
-            row_count = row_count + (result_count or 0)
+    # Determine if inputPath is a file or directory and process accordingly
+    if os.path.isdir(inputPath):
+        # Choose extensions based on inputFormat
+        if inputFormat == 'ndjson':
+            exts = ['.ndjson']
+        else:
+            exts = ['.json']
+        try:
+            for entry in sorted(os.listdir(inputPath)):
+                full_path = os.path.join(inputPath, entry)
+                if not os.path.isfile(full_path):
+                    continue
+                if not any(entry.lower().endswith(ext) for ext in exts):
+                    continue
+                if inputFormat == 'ndjson':
+                    process_ndjson_file(full_path)
+                else:  # json
+                    process_json_file(full_path)
+        except Exception:
+            logging.exception('Issue iterating directory "%s"', inputPath)
+    else:
+        # Single-file path (original behavior)
+        if inputFormat == 'ndjson':
+            process_ndjson_file(inputPath)
+        elif inputFormat == 'json':
+            process_json_file(inputPath)
+
     if outputFormat == 'csv':
         csvfile.close()
 
